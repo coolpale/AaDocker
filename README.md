@@ -1,16 +1,32 @@
 # 说明
 
 这个 Docker 使用方案，我已经使用几年了。目前公开一部分可开放的部分。
+
 未公开部分：
 1. 私有服务，一般都是基于 Go bin 的服务，即开即用
 2. 自动部署脚本
 
 
+
+
+## 自动部署脚本案例
 ```
 sh$ ./_deploy/gen-deploy  -- 生成 ./deploy
 sh$ ./deploy --env dev|prod
 sh$ ./deploy --env --opt DEBUG...
 ```
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/1.png)
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/2.png)
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/3.png)
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/4.png)
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/5.png)
+
+![自动部署脚本案例](https://raw.githubusercontent.com/AarioAi/AaDocker/master/_asset/README/6.png)
 
 
 # How To Use ? 怎么用？
