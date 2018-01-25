@@ -1,0 +1,332 @@
+#!/bin/bash
+# MAINTAINER Aario <AarioAi@gmail.com>
+set -e
+
+DO_CLEAN=1
+
+# Build Method
+#   STABLE, BETA, ALPHA
+build_method='STABLE'
+image_name=''
+
+if [ $# -eq 0 ]; then 
+    set -- -h
+fi
+
+
+while getopts 'abhf' opt
+do
+    case $opt in
+    a)
+        echo "Build All"
+        build_method='ALL'
+    ;;
+    b)
+        echo "Build Beta and Stable"
+        build_method='BETA'
+    ;;
+	s)
+		echo "Build Stable"
+        build_method='STABLE'
+	;;
+    h)
+        cat << EOF
+Usage: docker-build [\$options]
+    \$dir  : build the the alpha|beta|stable version Dockerfile under this directory
+            e.g.
+            *       : build all Dockerfiles under current directory
+            \$dir/* : build all Dockerfiles under this dir
+    -a    : Build All, includes alpha, beta and stable
+    -b    : Build Beta+, inclues beta and stable
+	-s    : Build Stable
+    -f    : fast, do not clean
+    -H    : help
+EOF
+        exit 0
+
+    ;;
+    f)
+        echo "DO_CLEAN=0"
+        DO_CLEAN=0
+    ;;
+    esac
+done
+
+# docker.build redis [--ulimited]
+base=$(cd "$(dirname "$0")"; pwd)
+cd "$base";
+
+linkEntrypointBase() {
+    for folder in `ls -a ${base}`; do
+        if [ "${folder:0:6}" != "centos" -a -d "$folder/script" -a -f "$base/$folder/Dockerfile" ]; then
+            #ln -f "$base/entrypointBase.sh" "$base/$folder/script/entrypointBase.readonly"
+            yes | cp -f "$base/centos--web/script/entrypointBase.sh" "$base/$folder/script/entrypointBase.readonly"
+        fi
+    done
+}
+
+linkEntrypointBase
+
+readonly BUILD_METHOD="buildAfterRefreshingFromImages"
+
+
+cleanDanglingImages() {
+    noneImages=$(docker images | awk '/^<none>/ {print $3}')
+    if [ ! -z "$noneImages" ]; then
+        echo "docker rmi $noneImages"
+        docker rmi $(docker images | awk '/^<none>/ {print $3}')
+    fi
+}
+
+safeClean(){
+    if [ $DO_CLEAN -gt 0 ]; then
+        cleanDanglingImages
+        rm -f "$base/.tmp-fromDockerfile"
+        rm -f "$base/.tmp-dockerfile"
+        rm -f "$base/.tmp-fromDockerfile-tmp"
+        rm -f "$base/Dockerfile"
+    fi
+}
+
+readonly AARIO_NEXTLINE_PLACEHOLDER="AARIO_NEXTLINE_PLACEHOLDER"
+readonly AARIO_SPACE_PLACEHOLDER="AARIO_SPACE_PLACEHOLDER"
+
+
+declare FROM_REGEXP_RETURN
+fromRegexp() {
+    echo
+    FROM_REGEXP_RETURN=${@//\\/\\\\}
+    FROM_REGEXP_RETURN=${FROM_REGEXP_RETURN// /\\s}
+    FROM_REGEXP_RETURN=${FROM_REGEXP_RETURN//:/\\:}
+    FROM_REGEXP_RETURN=${FROM_REGEXP_RETURN//\//\\/}
+    
+    echo "FROM_REGEXP_RETURN： "$FROM_REGEXP_RETURN
+}
+
+declare FROM_BUFFER_REGEXP
+fromBufferRegexp() {
+    fromDockerfile="$base/.tmp-fromDockerfile"
+    sed -i 's/^\s*#.*$//g' "$fromDockerfile"
+    sed -i 's/^\s*$//g' "$fromDockerfile"
+    
+    sed -Ei 's/^\s*(EXPOSE|VOLUME|ENTRYPOINT|CMD)\s.+$//g' "$fromDockerfile"
+ 
+    
+    FROM_BUFFER_REGEXP=$(cat $fromDockerfile | sed ':label;N;s/\n/AARIO_NEXTLINE_PLACEHOLDER/;b label')
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\\/\\\\}
+
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP// /AARIO_SPACE_PLACEHOLDER}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//:/\\:}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\|/\\|}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//</\\<}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//>/\\>}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//@/\\@}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\+/\\+}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\-/\\-}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\//\\/}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\./\\.}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\$/\\$}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//&/\\&}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\^/\\^}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\[/\\[}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\]/\\]}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\{/\\\{}
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//\}/\\\}}
+
+
+
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//AARIO_SPACE_PLACEHOLDER/ }
+    FROM_BUFFER_REGEXP=${FROM_BUFFER_REGEXP//AARIO_NEXTLINE_PLACEHOLDER/\\n}
+        
+   
+    
+
+}
+
+
+fromRecurve=1
+
+buildFromConcatedLocalImageFiles(){
+
+    fromRecurve=$[$fromRecurve - 1]
+   
+    while read line; do 
+        echo
+        echo "Matched $line ..."
+        
+        fromLocalPath=$(echo "$line" | awk -F 'FROM +aario/' '{print $2}'| awk -F ':' '{print $1}') 
+        fromTag=$(echo "$line" | grep ":" | awk -F ':' '{print $NF}')
+    
+        
+        if [ ! -z $fromTag ]; then
+            fromLocalPath=$fromLocalPath"--"$fromTag
+        fi
+        
+        
+        if [ -d "$base/$fromLocalPath" -a -f "$base/$fromLocalPath/Dockerfile" ]; then 
+            echo "Building FROM $fromLocalPath..."
+            
+            fromRecurve=$[$fromRecurve + 1]
+            yes | cp -rT "$base/$fromLocalPath/Dockerfile" "$base/.tmp-fromDockerfile"
+            echo -e "\n\n\n" >> "$base/.tmp-fromDockerfile"
+            sed -Ei "s/^\s*(COPY|ADD)\s+(.\/)?/\1 .\/$fromLocalPath\//g" "$base/.tmp-fromDockerfile"
+
+            #sed -i '1d' $base/.tmp-dockerfile
+
+            sed -Ei 's/^\s*MAINTAINER\s+/#&/' $base/.tmp-dockerfile
+
+            echo "Origin Line: $line"
+            fromRegexp "$line"
+            fromBufferRegexp
+            
+            sed -Ei "s/^${FROM_REGEXP_RETURN}$/\n${FROM_BUFFER_REGEXP}\n#&/g" "$base/.tmp-dockerfile"
+            
+        fi
+        
+        #cat $base/.tmp-fromDockerfile $base/.tmp-dockerfile > $base/Dockerfile
+
+        #break;
+
+        # \s+ seems not works
+    done < <(cat "$base/Dockerfile" | grep "^\s*FROM\s*aario\/")
+    
+    cat "$base/.tmp-dockerfile" > "$base/Dockerfile"
+    
+    echo "fromRecurve = $fromRecurve"
+    if [ $fromRecurve -gt 0 ]; then 
+        echo
+        echo "Recurve...."
+        echo
+        buildFromConcatedLocalImageFiles
+    fi
+        
+    
+}
+
+refreshedImages=''
+
+
+pushToRefreshedImages() {
+    isImageFrefreshed "$1"
+    if [ $? -eq 0 ]; then
+        refreshedImage=$(echo "$1" | md5sum | cut -d ' ' -f1)
+        refreshedImages="$refreshedImages $refreshedImage"
+    fi
+}
+isImageFrefreshed() {
+
+    container=$(echo "$1" | md5sum | cut -d ' ' -f1)
+    for refreshedImage in refreshedImages; do
+        if [ "$container" == "$refreshedImage" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+buildAfterRefreshingFromImages() {
+
+    echo
+    echo "Preparing $1 ..."
+    while read line; do 
+        echo "Matched $line ..."
+        fromImage=${line/FROM /}
+        fromLocalPath=$(echo "$line" | awk -F 'FROM +aario/' '{print $2}'| awk -F ':' '{print $1}') 
+        fromTag=$(echo "$line" | grep ":" | awk -F ':' '{print $NF}')
+    
+        
+        if [ ! -z $fromTag ]; then
+            fromLocalPath=$fromLocalPath"--"$fromTag
+        fi
+        
+        echo "fromLocalPath: $fromLocalPath"
+        
+        isImageFrefreshed "$fromImage"
+        
+        if [ $? -eq 0 -a -d "$base/$fromLocalPath" -a -f "$base/$fromLocalPath/Dockerfile" ]; then
+            echo "Rebuilding $line"
+            currentDir=`pwd`
+            cd "$base/$fromLocalPath"
+            docker build -t "$fromImage" .
+            cd "$currentDir"
+            echo "Built $line finished!"
+            echo
+            pushToRefreshedImages "$fromImage"
+        fi
+    done < <(cat "$1" | grep "^\s*FROM\s*aario\/")
+}
+
+successfully_built=''
+skipped_built=''
+
+  # ./docker-build php*     ---> $@ = php--7 php--56
+
+for dockerFolder in $@; do
+    
+  v=$(echo $dockerFolder | awk -F '--' '{print $2}')
+  if [ ! -z "$v" ]; then
+      len=${#v}
+      last5="${v:$len-5:$len}"
+      last4="${v:$len-4:$len}"
+      
+      if [ $build_method == 'BETA' -a "$last5" == 'alpha' ]; then
+        skipped_built=$skipped_built" "$dockerFolder
+        continue;
+      fi
+      
+      if [ $build_method == 'STABLE' ]; then
+        if [ "$last5" == 'alpha' -o "$last4" == 'beta' ]; then
+            skipped_built=$skipped_built" "$dockerFolder
+            continue;
+        fi
+      fi
+  fi
+  
+  dir="$base/$dockerFolder"
+
+  dockerfile="$dir/Dockerfile"
+
+  if [ -d "$dir" -a -f "$dockerfile" ]; then
+    safeClean;
+    
+    if [ "${BUILD_METHOD}" == "buildFromConcatedLocalImageFiles" ]; then 
+        yes | cp -rT "$dockerfile" "$base/Dockerfile"   
+        sed -i 's/^\s*#.*$//g' "$base/Dockerfile"  
+        sed -i 's/^\s*$//g' "$base/Dockerfile"  
+        yes | cp -rT "$base/Dockerfile" "$base/.tmp-dockerfile"  
+        sed -Ei "s/^\s*(COPY|ADD)\s+(.\/)?/\1 .\/$dockerFolder\//g" "$base/.tmp-dockerfile"
+        buildFromConcatedLocalImageFiles
+    else 
+        buildAfterRefreshingFromImages $dockerfile
+    fi
+    
+    image=$dockerFolder
+    tag=$(echo "$dockerFolder" | grep "\-\-" | awk -F '--' '{print $NF}')
+    
+    
+    if [ ! -z "$tag" ]; then 
+        image=$(echo "$dockerFolder" | grep "\-\-" | awk -F '--' '{print $1}')
+    else
+        tag='latest'
+    fi
+    
+    image="aario/$image:$tag"
+   
+    if [ -f "$base/Dockerfile" ]; then 
+		chmod -R u+x "$base"
+        docker build -t "$image" "$base/"
+    else
+		chmod -R u+x "$dir"
+        cd "$dir"
+        docker build -t "$image" .
+    fi
+    
+    successfully_built=$successfully_built' '$dockerFolder
+  fi
+done
+
+safeClean
+
+echo
+echo "Successfully built image $image ($successfully_built)"
+echo "Skipped built ($skipped_built)"
+echo
